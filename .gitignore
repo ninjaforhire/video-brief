@@ -1,0 +1,4 @@
+video-briefs/
+__pycache__/
+.DS_Store
+.env
