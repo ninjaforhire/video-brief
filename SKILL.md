@@ -10,14 +10,16 @@ Two-phase pipeline: Gemini extracts (it sees every frame, you don't), then you s
 ## Phase 1: Ingest (Gemini)
 
 ```bash
-python3 scripts/ingest.py "<VIDEO_URL>"
+python3 ~/.claude/skills/video-brief/scripts/ingest.py "<VIDEO_URL>"
 ```
+
+(Adjust the path if the skill folder lives elsewhere — the script has no dependencies on its location. From a repo checkout it's `python3 scripts/ingest.py`.)
 
 - Default model `gemini-2.5-pro`. Add `--model gemini-2.5-flash` for long videos (>45 min) or quick passes.
 - Add `--transcript` when the user wants a full transcript too.
 - Needs `GEMINI_API_KEY` in env.
 - Works with YouTube URLs and direct video file links (.mp4/.webm/.mov). Non-YouTube links download and upload through the Gemini Files API automatically. Player pages and login-gated platforms are out of scope for the Free Version.
-- Output: structured brief at `./video-briefs/<video-id>_brief.md` — chapter map, techniques step-by-step, verbatim on-screen code/prompts/commands, claims with timestamps, spoken-only insights, ambiguities.
+- Output: structured brief at `./video-briefs/<video-id>_brief.md` (relative to the current working directory) — chapter map, techniques step-by-step, verbatim on-screen code/prompts/commands, claims with timestamps, spoken-only insights, ambiguities.
 - Takes 1-5 minutes for a typical tutorial. Report token usage to the user (script logs it).
 
 ## Phase 2: Deliver
