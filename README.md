@@ -20,6 +20,12 @@ Works with YouTube URLs out of the box, plus any direct video file link (.mp4/.w
 - Optional full timestamped transcript (`--transcript`)
 - Timestamps convert straight to deep links: `https://youtube.com/watch?v=<id>&t=<seconds>s`
 
+Every run ends with a receipt:
+
+```
+Saved 74 min · watched 1:18:35 in 4:12 · cost $0.71
+```
+
 ## Setup
 
 1. Python 3.10+ (standard library only, no pip installs)
@@ -39,12 +45,12 @@ Options:
 
 | Flag | What it does |
 |---|---|
-| `--model` | Gemini model. Default `gemini-2.5-pro`. Use `gemini-2.5-flash` for videos over ~45 min or cheap fast passes |
+| `--model` | Gemini model. Default `gemini-3.6-flash` |
 | `--transcript` | Second pass producing a full timestamped transcript |
 | `--out-dir` | Output directory. Default `./video-briefs/` |
 | `--dry-run` | Print the plan, no API call |
 
-Long videos: `gemini-2.5-pro` fits roughly an hour of video context. Past that, the script automatically retries at low media resolution (fits ~3 hours), or pick `--model gemini-2.5-flash` up front.
+Long videos: the default model holds a 1M-token context, roughly 3.2 hours of video, so most training calls and workshops fit in a single pass.
 
 ## Using it as a Claude Code skill
 
@@ -52,7 +58,17 @@ Drop this folder into `~/.claude/skills/video-brief/` and Claude Code picks it u
 
 ## Cost
 
-You pay Google directly for Gemini API usage. A typical 60-90 minute video runs a few cents to a few tens of cents depending on model. The script logs token usage after every run.
+**Free to try.** Google's AI Studio free tier covers casual use at $0, no credit card. It is rate-limited, and Google may use free-tier data to improve its products, so keep anything sensitive on a paid key.
+
+On a paid key you pay Google directly. Video bills at roughly 87 tokens per second, measured against `gemini-3.6-flash`:
+
+| Video length | Approximate cost |
+|---|---|
+| 10 minutes | under $0.10 |
+| 45 minutes | about $0.40 |
+| 78 minutes | about $0.70 |
+
+The run summary counts thinking tokens as output, because Google bills them. The script also logs raw token usage after every run.
 
 ## What works in the Free Version
 

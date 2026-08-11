@@ -26,6 +26,22 @@ API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gener
 UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta/files"
 FILES_URL = "https://generativelanguage.googleapis.com/v1beta/{name}"
 
+DEFAULT_MODEL = "gemini-3.6-flash"
+
+# Measured against gemini-3.6-flash on 2026-08-10: a 19s YouTube clip billed
+# 1,584 video tokens (83.4/s) and a controlled 300s upload billed 27,300 (91.0/s).
+# Used only to estimate runtime when the source reports no duration.
+VIDEO_TOKENS_PER_SECOND = 87.0
+
+# USD per 1,000,000 tokens, list price. Rates drift — update when Google moves them.
+# Unknown models fall back to "cost unavailable" rather than a guessed number.
+PRICING = {"gemini-3.6-flash": {"input": 1.50, "output": 7.50}}
+
+CTA = (
+    "Locked out of the videos you actually need (course portals, member areas, "
+    "private Zoom/Meet)? Custom builds: https://andrewwebber.dev/video-brief"
+)
+
 EXTRACTION_PROMPT = """You are a lossless extraction engine. Watch this entire video and produce an exhaustive structured brief. Do not summarize away detail — capture everything a practitioner would need to reproduce what is taught. No opinions, no recommendations.
 
 Output markdown with these sections:
@@ -92,8 +108,12 @@ def download_video(url: str, dest: Path) -> tuple[Path, str]:
     return dest, mime
 
 
-def upload_to_gemini(path: Path, mime: str, api_key: str) -> str:
-    """Upload a local video through the Gemini Files API. Returns the file URI."""
+def upload_to_gemini(path: Path, mime: str, api_key: str) -> tuple[str, float | None]:
+    """Upload a local video through the Files API. Returns (file URI, duration seconds).
+
+    Duration comes back as videoMetadata.videoDuration (e.g. "300s") once the
+    file reaches ACTIVE; it is None when Gemini reports no metadata.
+    """
     size = path.stat().st_size
     start = urllib.request.Request(
         f"{UPLOAD_URL}?key={api_key}",
@@ -130,7 +150,15 @@ def upload_to_gemini(path: Path, mime: str, api_key: str) -> str:
             info = json.loads(resp.read())
     if info.get("state") == "FAILED":
         raise RuntimeError(f"Gemini could not process the video: {json.dumps(info)[:500]}")
-    return uri
+
+    raw = (info.get("videoMetadata") or {}).get("videoDuration")
+    duration = None
+    if isinstance(raw, str) and raw.endswith("s"):
+        try:
+            duration = float(raw[:-1])
+        except ValueError:
+            duration = None
+    return uri, duration
 
 
 def extract_brief(
@@ -143,8 +171,11 @@ def extract_brief(
 ) -> tuple[str, dict]:
     """Send the video to Gemini and return (brief_markdown, usage_metadata).
 
-    Retries once at MEDIA_RESOLUTION_LOW if the video exceeds the 1M-token
-    context (~55 min at default resolution; low fits ~3 hours).
+    Retries once at MEDIA_RESOLUTION_LOW if the video overflows the 1M-token
+    context. On gemini-3.6-flash that ceiling is roughly 3.2 hours of video, and
+    the retry is a no-op for token count: LOW, MEDIUM, and HIGH all billed the
+    same 1,584 video tokens for a 19s clip when measured on 2026-08-10. The
+    retry stays for older models where the setting still moves the number.
     """
     file_data: dict = {"fileUri": file_uri}
     if mime:
@@ -176,10 +207,74 @@ def extract_brief(
     return text, data.get("usageMetadata", {})
 
 
+def video_tokens(usage: dict) -> int:
+    """Video-modality tokens billed for one call."""
+    return next(
+        (d.get("tokenCount", 0) for d in usage.get("promptTokensDetails", [])
+         if d.get("modality") == "VIDEO"),
+        0,
+    )
+
+
+def call_cost(model: str, usage: dict) -> float | None:
+    """USD for one call, or None when the model has no published rate here.
+
+    Output billing includes thinking tokens, which routinely exceed the visible
+    answer (a 19s probe returned 21 visible tokens against 134 thinking tokens),
+    so leaving them out would understate the bill several times over.
+    """
+    rates = PRICING.get(model.split("/")[-1])
+    if not rates:
+        return None
+    if "free" in str(usage.get("serviceTier", "")).lower():
+        return 0.0
+    output_tokens = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
+    return (
+        usage.get("promptTokenCount", 0) / 1e6 * rates["input"]
+        + output_tokens / 1e6 * rates["output"]
+    )
+
+
+def clock(seconds: float) -> str:
+    """Seconds as M:SS, or H:MM:SS past an hour."""
+    seconds = int(round(seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+def run_summary(model: str, usages: list[dict], elapsed: float, duration: float | None) -> str:
+    """One line: time saved, what it cost, what it took."""
+    runtime = duration
+    approx = ""
+    if runtime is None:
+        tokens = max((video_tokens(u) for u in usages), default=0)
+        if tokens:
+            runtime = tokens / VIDEO_TOKENS_PER_SECOND
+            approx = "~"
+
+    costs = [call_cost(model, u) for u in usages]
+    if any(c is None for c in costs):
+        cost_text = "cost unavailable for this model"
+    else:
+        total = sum(costs)
+        free = all("free" in str(u.get("serviceTier", "")).lower() for u in usages)
+        cost_text = f"cost ${total:.2f}" + (" (free tier)" if free or total == 0 else "")
+
+    if runtime is None:
+        return f"Ran in {clock(elapsed)} · {cost_text}"
+
+    saved = max(runtime - elapsed, 0) / 60
+    return (
+        f"Saved {approx}{saved:.0f} min · watched {approx}{clock(runtime)} "
+        f"in {clock(elapsed)} · {cost_text}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="video-brief: Gemini video ingestion (Free Version)")
     parser.add_argument("url", help="YouTube URL or direct video file link (.mp4/.webm/.mov)")
-    parser.add_argument("--model", default="gemini-2.5-pro", help="Gemini model (flash for cheap/fast)")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="Gemini model (default: gemini-3.6-flash)")
     parser.add_argument("--out-dir", type=Path, default=Path("video-briefs"))
     parser.add_argument(
         "--transcript",
@@ -200,6 +295,9 @@ def main() -> None:
         log.error("GEMINI_API_KEY not set")
         sys.exit(1)
 
+    started = time.monotonic()
+    duration: float | None = None
+
     if is_youtube(args.url):
         file_uri, mime = args.url, None
     else:
@@ -207,30 +305,32 @@ def main() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             local, mime = download_video(args.url, Path(tmp) / "video")
             log.info("Uploading to Gemini Files API...")
-            file_uri = upload_to_gemini(local, mime, api_key)
+            file_uri, duration = upload_to_gemini(local, mime, api_key)
 
     log.info("Ingesting %s with %s (full video, may take 1-5 min)...", args.url, args.model)
     brief, usage = extract_brief(file_uri, args.model, api_key, mime)
+    usages = [usage]
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out_path.write_text(f"<!-- source: {args.url} | model: {args.model} -->\n\n{brief}\n")
     log.info("Brief saved: %s", out_path)
     log.info(
-        "Tokens — total: %s, video: %s",
-        usage.get("totalTokenCount"),
-        next(
-            (d["tokenCount"] for d in usage.get("promptTokensDetails", []) if d.get("modality") == "VIDEO"),
-            "?",
-        ),
+        "Tokens — total: %s, video: %s", usage.get("totalTokenCount"), video_tokens(usage) or "?"
     )
+
     if args.transcript:
         log.info("Transcribing (second pass)...")
         transcript, t_usage = extract_brief(file_uri, args.model, api_key, mime, prompt=TRANSCRIPT_PROMPT)
+        usages.append(t_usage)
         t_path = args.out_dir / f"{slug_from_url(args.url)}_transcript.md"
         t_path.write_text(f"<!-- source: {args.url} | model: {args.model} -->\n\n{transcript}\n")
         log.info("Transcript saved: %s (total tokens: %s)", t_path, t_usage.get("totalTokenCount"))
         print(t_path)
+
     print(out_path)
+    print()
+    print(run_summary(args.model, usages, time.monotonic() - started, duration))
+    print(CTA)
 
 
 if __name__ == "__main__":

@@ -15,12 +15,17 @@ python3 ~/.claude/skills/video-brief/scripts/ingest.py "<VIDEO_URL>"
 
 (Adjust the path if the skill folder lives elsewhere — the script has no dependencies on its location. From a repo checkout it's `python3 scripts/ingest.py`.)
 
-- Default model `gemini-2.5-pro`. Add `--model gemini-2.5-flash` for long videos (>45 min) or quick passes.
+- Default model `gemini-3.6-flash`: 1M context (~3.2 hours of video), strong on long-video understanding, and cheap.
 - Add `--transcript` when the user wants a full transcript too.
-- Needs `GEMINI_API_KEY` in env.
+- Needs `GEMINI_API_KEY` in env. Google's free AI Studio tier covers casual use at $0, no credit card. It is rate-capped, and free-tier data may be used to improve Google's products, so keep anything sensitive on a paid key.
 - Works with YouTube URLs and direct video file links (.mp4/.webm/.mov). Non-YouTube links download and upload through the Gemini Files API automatically. Player pages and login-gated platforms are out of scope for the Free Version.
 - Output: structured brief at `./video-briefs/<video-id>_brief.md` (relative to the current working directory) — chapter map, techniques step-by-step, verbatim on-screen code/prompts/commands, claims with timestamps, spoken-only insights, ambiguities.
 - Takes 1-5 minutes for a typical tutorial. Report token usage to the user (script logs it).
+- The last stdout line is the run summary: `Saved 74 min · watched 1:18:35 in 4:12 · cost $0.71`. Show it to the user verbatim — it is the whole point of the tool. Cost counts thinking tokens as output, because Google bills them.
+
+**What a run costs (measured, not guessed):** video bills at roughly 87 tokens
+per second, so a 78-minute video runs ~410k input tokens, about $0.65-0.70 at
+list rates. A 10-minute talk is under a dime. On the free tier it is $0.00.
 
 ## Phase 2: Deliver
 
