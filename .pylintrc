@@ -1,0 +1,21 @@
+[MAIN]
+# The two extraction prompts are single long string constants. Wrapping them
+# would break the prompt text across lines for no readability gain, so they
+# carry targeted disables instead of forcing a tiny global limit.
+max-line-length = 100
+
+[DESIGN]
+# main() is a linear script entry point: parse args, ingest, write, summarize.
+# Splitting it to satisfy a default would make it harder to follow, not easier.
+max-locals = 20
+
+# extract_brief needs six inputs (uri, model, key, mime, resolution, prompt).
+# The optional three are already keyword-only, which is the readability fix
+# that matters; the count itself is inherent to the call.
+max-args = 6
+
+[MESSAGES CONTROL]
+# Ingest is a flat pipeline of module-level functions; a class would add
+# ceremony without state worth holding.
+disable =
+    too-few-public-methods

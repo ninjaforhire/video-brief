@@ -42,6 +42,7 @@ CTA = (
     "private Zoom/Meet)? Custom builds: https://andrewwebber.dev/video-brief"
 )
 
+# pylint: disable=line-too-long
 EXTRACTION_PROMPT = """You are a lossless extraction engine. Watch this entire video and produce an exhaustive structured brief. Do not summarize away detail — capture everything a practitioner would need to reproduce what is taught. No opinions, no recommendations.
 
 Output markdown with these sections:
@@ -67,16 +68,21 @@ Important points said aloud but never shown on screen.
 
 ## Ambiguities
 Anything illegible, skipped, or unclear in the video."""
+# pylint: enable=line-too-long
 
+# pylint: disable=line-too-long
 TRANSCRIPT_PROMPT = """Produce a full timestamped transcript of this video. Format as markdown: one line per utterance block, starting with [MM:SS] (or [H:MM:SS] past one hour). Clean up filler words lightly but keep wording faithful. Note significant on-screen visuals inline as *[visual: ...]* where they carry meaning the words don't."""
+# pylint: enable=line-too-long
 
 
 def is_youtube(url: str) -> bool:
+    """True when the URL can be handed to Gemini as a fileData URI directly."""
     host = urllib.parse.urlparse(url).netloc.lower()
     return host.endswith("youtube.com") or host.endswith("youtu.be")
 
 
 def slug_from_url(url: str) -> str:
+    """Filename stem for a video: its YouTube ID, else the URL's path stem."""
     match = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]{6,})", url)
     if match:
         return match.group(1)
@@ -165,6 +171,7 @@ def extract_brief(
     file_uri: str,
     model: str,
     api_key: str,
+    *,
     mime: str | None = None,
     low_res: bool = False,
     prompt: str = EXTRACTION_PROMPT,
@@ -198,7 +205,9 @@ def extract_brief(
         detail = exc.read().decode(errors="replace")
         if not low_res and "token count exceeds" in detail:
             log.info("Video exceeds 1M-token context — retrying at low media resolution...")
-            return extract_brief(file_uri, model, api_key, mime, low_res=True, prompt=prompt)
+            return extract_brief(
+                file_uri, model, api_key, mime=mime, low_res=True, prompt=prompt
+            )
         raise RuntimeError(f"Gemini API {exc.code}: {detail[:1000]}") from exc
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -272,9 +281,14 @@ def run_summary(model: str, usages: list[dict], elapsed: float, duration: float 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="video-brief: Gemini video ingestion (Free Version)")
+    """Parse args, ingest the video, write the brief, print the run summary."""
+    parser = argparse.ArgumentParser(
+        description="video-brief: Gemini video ingestion (Free Version)"
+    )
     parser.add_argument("url", help="YouTube URL or direct video file link (.mp4/.webm/.mov)")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Gemini model (default: gemini-3.6-flash)")
+    parser.add_argument(
+        "--model", default=DEFAULT_MODEL, help="Gemini model (default: gemini-3.6-flash)"
+    )
     parser.add_argument("--out-dir", type=Path, default=Path("video-briefs"))
     parser.add_argument(
         "--transcript",
@@ -308,7 +322,7 @@ def main() -> None:
             file_uri, duration = upload_to_gemini(local, mime, api_key)
 
     log.info("Ingesting %s with %s (full video, may take 1-5 min)...", args.url, args.model)
-    brief, usage = extract_brief(file_uri, args.model, api_key, mime)
+    brief, usage = extract_brief(file_uri, args.model, api_key, mime=mime)
     usages = [usage]
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -320,7 +334,9 @@ def main() -> None:
 
     if args.transcript:
         log.info("Transcribing (second pass)...")
-        transcript, t_usage = extract_brief(file_uri, args.model, api_key, mime, prompt=TRANSCRIPT_PROMPT)
+        transcript, t_usage = extract_brief(
+            file_uri, args.model, api_key, mime=mime, prompt=TRANSCRIPT_PROMPT
+        )
         usages.append(t_usage)
         t_path = args.out_dir / f"{slug_from_url(args.url)}_transcript.md"
         t_path.write_text(f"<!-- source: {args.url} | model: {args.model} -->\n\n{transcript}\n")
